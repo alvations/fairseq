@@ -95,7 +95,7 @@ class Dictionary(object):
                 self.symbols.append(word)
                 self.count.append(new_dict.count[idx2])
 
-    def finalize(self, threshold=1, nwords=-1, padding_factor=8):
+    def finalize(self, threshold=-1, nwords=-1, padding_factor=8):
         """Sort symbols by frequency in descending order, ignoring special ones.
 
         Args:
@@ -106,15 +106,17 @@ class Dictionary(object):
                 multiple of 8, which is important on some hardware (e.g., Nvidia
                 Tensor Cores).
         """
-        if nwords == -1:
+        if nwords <= 0:
             nwords = len(self)
 
+        new_indices = dict(zip(self.symbols[:self.nspecial], range(self.nspecial)))
         new_symbols = self.symbols[:self.nspecial]
         new_count = self.count[:self.nspecial]
 
         c = Counter(dict(zip(self.symbols[self.nspecial:], self.count[self.nspecial:])))
         for symbol, count in c.most_common(nwords - self.nspecial):
             if count >= threshold:
+                new_indices[symbol] = len(new_symbols)
                 new_symbols.append(symbol)
                 new_count.append(count)
             else:
@@ -124,16 +126,19 @@ class Dictionary(object):
         if padding_factor > 1:
             i = 0
             while threshold_nwords % padding_factor != 0:
-                new_symbols.append('madeupword{:04d}'.format(i))
+                symbol = 'madeupword{:04d}'.format(i)
+                new_indices[symbol] = len(new_symbols)
+                new_symbols.append(symbol)
                 new_count.append(0)
                 i += 1
                 threshold_nwords += 1
 
-        assert min(new_count[self.nspecial:]) >= threshold
         assert len(new_symbols) % padding_factor == 0
+        assert len(new_symbols) == len(new_indices)
 
-        self.count = tuple(new_count)
-        self.symbols = tuple(new_symbols)
+        self.count = list(new_count)
+        self.symbols = list(new_symbols)
+        self.indices = new_indices
 
     def pad(self):
         """Helper to get index of pad symbol"""
@@ -181,12 +186,12 @@ class Dictionary(object):
             d.count.append(count)
         return d
 
-    def save(self, f, threshold=3, nwords=-1):
+    def save(self, f):
         """Stores dictionary into a text file"""
         if isinstance(f, str):
             os.makedirs(os.path.dirname(f), exist_ok=True)
             with open(f, 'w', encoding='utf-8') as fd:
-                return self.save(fd, threshold, nwords)
+                return self.save(fd)
         for symbol, count in zip(self.symbols[self.nspecial:], self.count[self.nspecial:]):
             print('{} {}'.format(symbol, count), file=f)
 
@@ -194,3 +199,20 @@ class Dictionary(object):
         t = torch.Tensor(length).uniform_(self.nspecial + 1, len(self)).long()
         t[-1] = self.eos()
         return t
+
+class TruncatedDictionary(object):
+
+    def __init__(self, wrapped_dict, length):
+        self.__class__ = type(wrapped_dict.__class__.__name__,
+                              (self.__class__, wrapped_dict.__class__), {})
+        self.__dict__ = wrapped_dict.__dict__
+        self.wrapped_dict = wrapped_dict
+        self.length = min(len(self.wrapped_dict), length)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, i):
+        if i < self.length:
+            return self.wrapped_dict[i]
+        return self.wrapped_dict.unk()

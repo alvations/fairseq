@@ -34,6 +34,14 @@ class TestTranslation(unittest.TestCase):
                 train_translation_model(data_dir, 'fconv_iwslt_de_en')
                 generate_main(data_dir)
 
+    def test_raw(self):
+        with contextlib.redirect_stdout(StringIO()):
+            with tempfile.TemporaryDirectory('test_fconv_raw') as data_dir:
+                create_dummy_data(data_dir)
+                preprocess_translation_data(data_dir, ['--output-format', 'raw'])
+                train_translation_model(data_dir, 'fconv_iwslt_de_en', ['--raw-text'])
+                generate_main(data_dir, ['--raw-text'])
+
     def test_fp16(self):
         with contextlib.redirect_stdout(StringIO()):
             with tempfile.TemporaryDirectory('test_fp16') as data_dir:
@@ -49,6 +57,47 @@ class TestTranslation(unittest.TestCase):
                 preprocess_translation_data(data_dir)
                 train_translation_model(data_dir, 'fconv_iwslt_de_en', ['--update-freq', '3'])
                 generate_main(data_dir)
+
+    def test_max_positions(self):
+        with contextlib.redirect_stdout(StringIO()):
+            with tempfile.TemporaryDirectory('test_max_positions') as data_dir:
+                create_dummy_data(data_dir)
+                preprocess_translation_data(data_dir)
+                with self.assertRaises(Exception) as context:
+                    train_translation_model(
+                        data_dir, 'fconv_iwslt_de_en', ['--max-target-positions', '5'],
+                    )
+                self.assertTrue(
+                    'skip this example with --skip-invalid-size-inputs-valid-test' \
+                    in str(context.exception)
+                )
+                train_translation_model(
+                    data_dir, 'fconv_iwslt_de_en',
+                    ['--max-target-positions', '5', '--skip-invalid-size-inputs-valid-test'],
+                )
+                with self.assertRaises(Exception) as context:
+                    generate_main(data_dir)
+                generate_main(data_dir, ['--skip-invalid-size-inputs-valid-test'])
+
+    def test_generation(self):
+        with contextlib.redirect_stdout(StringIO()):
+            with tempfile.TemporaryDirectory('test_sampling') as data_dir:
+                create_dummy_data(data_dir)
+                preprocess_translation_data(data_dir)
+                train_translation_model(data_dir, 'fconv_iwslt_de_en')
+                generate_main(data_dir, [
+                    '--sampling',
+                    '--sampling-temperature', '2',
+                    '--beam', '2',
+                    '--nbest', '2',
+                ])
+                generate_main(data_dir, [
+                    '--sampling',
+                    '--sampling-topk', '3',
+                    '--beam', '2',
+                    '--nbest', '2',
+                ])
+                generate_main(data_dir, ['--prefix-size', '2'])
 
     def test_lstm(self):
         with contextlib.redirect_stdout(StringIO()):
@@ -144,18 +193,20 @@ def create_dummy_data(data_dir, num_examples=1000, maxlen=20):
     _create_dummy_data('test.out')
 
 
-def preprocess_translation_data(data_dir):
+def preprocess_translation_data(data_dir, extra_flags=None):
     preprocess_parser = preprocess.get_parser()
-    preprocess_args = preprocess_parser.parse_args([
-        '--source-lang', 'in',
-        '--target-lang', 'out',
-        '--trainpref', os.path.join(data_dir, 'train'),
-        '--validpref', os.path.join(data_dir, 'valid'),
-        '--testpref', os.path.join(data_dir, 'test'),
-        '--thresholdtgt', '0',
-        '--thresholdsrc', '0',
-        '--destdir', data_dir,
-    ])
+    preprocess_args = preprocess_parser.parse_args(
+        [
+            '--source-lang', 'in',
+            '--target-lang', 'out',
+            '--trainpref', os.path.join(data_dir, 'train'),
+            '--validpref', os.path.join(data_dir, 'valid'),
+            '--testpref', os.path.join(data_dir, 'test'),
+            '--thresholdtgt', '0',
+            '--thresholdsrc', '0',
+            '--destdir', data_dir,
+        ] + (extra_flags or []),
+    )
     preprocess.main(preprocess_args)
 
 
@@ -181,7 +232,7 @@ def train_translation_model(data_dir, arch, extra_flags=None):
     train.main(train_args)
 
 
-def generate_main(data_dir):
+def generate_main(data_dir, extra_flags=None):
     generate_parser = options.get_generation_parser()
     generate_args = options.parse_args_and_arch(
         generate_parser,
@@ -193,7 +244,8 @@ def generate_main(data_dir):
             '--max-len-b', '5',
             '--gen-subset', 'valid',
             '--no-progress-bar',
-        ],
+            '--print-alignment',
+        ] + (extra_flags or []),
     )
 
     # evaluate model in batch mode
@@ -229,7 +281,7 @@ def train_language_model(data_dir, arch):
             data_dir,
             '--arch', arch,
             '--optimizer', 'nag',
-            '--lr', '1.0',
+            '--lr', '0.1',
             '--criterion', 'adaptive_loss',
             '--adaptive-softmax-cutoff', '5,10,15',
             '--decoder-layers', '[(850, 3)] * 2 + [(1024,4)]',
@@ -240,6 +292,7 @@ def train_language_model(data_dir, arch):
             '--max-epoch', '1',
             '--no-progress-bar',
             '--distributed-world-size', '1',
+            '--ddp-backend', 'no_c10d',
         ],
     )
     train.main(train_args)
