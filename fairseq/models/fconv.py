@@ -748,3 +748,11 @@ def fconv_wmt_en_fr(args):
     args.decoder_layers = getattr(args, 'decoder_layers', convs)
     args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 512)
     base_architecture(args)
+
+
+@register_model_architecture('fconv', 'fconv_3_layer')
+def fconv_3_layer(args):
+    args.share_input_output_embed = getattr(args, 'share_input_output_embed', False)
+    args.encoder_layers = getattr(args, 'encoder_layers', '[(512, 3)] * 3')
+    args.decoder_layers = getattr(args, 'decoder_layers', '[(512, 3)] * 3')
+    base_architecture(args)
